@@ -1,243 +1,363 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import plotly.express as px
 
-st.set_page_config(page_title="Excel Analytics Dashboard", layout="wide")
+st.set_page_config(page_title="Segment III Payout Dashboard", layout="wide")
 
-st.title("Excel Analytics Dashboard")
+st.title("Segment III Payout Analytics Dashboard")
 
-# -------------------------------
-# Function: make duplicate columns unique
-# -------------------------------
-def make_unique(columns):
-    seen = {}
-    new_cols = []
-    for col in columns:
-        if col in seen:
-            seen[col] += 1
-            new_cols.append(f"{col}_{seen[col]}")
-        else:
-            seen[col] = 0
-            new_cols.append(col)
-    return new_cols
+# -----------------------------
+# DATABASE CONNECTION
+# -----------------------------
 
+conn = sqlite3.connect("analytics.db", check_same_thread=False)
+cursor = conn.cursor()
 
-# -------------------------------
-# Upload Excel
-# -------------------------------
-uploaded_file = st.file_uploader(
-    "Upload Excel File",
-    type=["xlsx", "xls", "xlsm", "xlsb"]
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS segment3_data (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+Dealer_Code TEXT,
+Dealer_name TEXT,
+VIN TEXT,
+Parts_RRP REAL,
+Final_Payout REAL,
+Final_Eligibility TEXT,
+Month TEXT,
+Year INTEGER,
+upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
+""")
 
-# -------------------------------
-# Month Year Selection
-# -------------------------------
-col1, col2 = st.columns(2)
+conn.commit()
 
-month = col1.selectbox(
+# -----------------------------
+# SIDEBAR UPLOAD
+# -----------------------------
+
+st.sidebar.header("Upload Data")
+
+month = st.sidebar.selectbox(
     "Select Month",
     [
-        "January","February","March","April",
-        "May","June","July","August",
-        "September","October","November","December"
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
     ]
 )
 
-year = col2.selectbox(
+year = st.sidebar.number_input(
     "Select Year",
-    list(range(2020,2035))
+    min_value=2020,
+    max_value=2035,
+    value=2024
 )
 
-# -------------------------------
-# Process Excel
-# -------------------------------
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Segment III Excel",
+    type=["xlsx","xls","xlsb"]
+)
+
+# -----------------------------
+# PROCESS UPLOADED FILE
+# -----------------------------
+
 if uploaded_file:
 
-    df = pd.read_excel(uploaded_file)
+    df_upload = pd.read_excel(uploaded_file)
 
-    # Clean column names
-    df.columns = df.columns.astype(str).str.replace("\n"," ").str.strip()
-
-    # Remove empty columns
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-
-    # Fix duplicate column names
-    df.columns = make_unique(df.columns)
-
-    # Remove fully empty rows
-    df = df.dropna(how="all")
-
-    st.success(f"Loaded {len(df)} rows for {month} {year}")
-
-    # -------------------------------
-    # Sidebar Filters
-    # -------------------------------
-    st.sidebar.header("Filters")
-
-    filtered_df = df.copy()
-
-    # Dealer filter
-    if "Dealer name" in df.columns:
-        dealers = st.sidebar.multiselect(
-            "Dealer",
-            df["Dealer name"].dropna().unique(),
-            default=df["Dealer name"].dropna().unique()
-        )
-        filtered_df = filtered_df[filtered_df["Dealer name"].isin(dealers)]
-
-    # Region filter
-    if "Region" in df.columns:
-        regions = st.sidebar.multiselect(
-            "Region",
-            df["Region"].dropna().unique(),
-            default=df["Region"].dropna().unique()
-        )
-        filtered_df = filtered_df[filtered_df["Region"].isin(regions)]
-
-    # VIN search
-    if "VIN" in df.columns:
-        vin_search = st.sidebar.text_input("Search VIN")
-        if vin_search:
-            filtered_df = filtered_df[
-                filtered_df["VIN"].astype(str).str.contains(vin_search)
-            ]
-
-    # Model filter
-    if "Vehicle Model  Desc" in df.columns:
-        models = st.sidebar.multiselect(
-            "Vehicle Model",
-            df["Vehicle Model  Desc"].dropna().unique(),
-            default=df["Vehicle Model  Desc"].dropna().unique()
-        )
-        filtered_df = filtered_df[
-            filtered_df["Vehicle Model  Desc"].isin(models)
-        ]
-
-    # -------------------------------
-    # KPI Metrics
-    # -------------------------------
-    st.subheader("Key Metrics")
-
-    col1, col2, col3 = st.columns(3)
-
-    if "Amount" in filtered_df.columns:
-        col1.metric(
-            "Total Amount",
-            f"{filtered_df['Amount'].sum():,.2f}"
-        )
-
-    if "Dealer name" in filtered_df.columns:
-        col2.metric(
-            "Total Dealers",
-            filtered_df["Dealer name"].nunique()
-        )
-
-    col3.metric(
-        "Total Records",
-        len(filtered_df)
+    # CLEAN COLUMN NAMES
+    df_upload.columns = (
+        df_upload.columns
+        .astype(str)
+        .str.replace("\n"," ")
+        .str.replace("_"," ")
+        .str.strip()
     )
 
-    st.divider()
+    # REMOVE DUPLICATE COLUMN NAMES
+    df_upload = df_upload.loc[:, ~df_upload.columns.duplicated()]
 
-    # -------------------------------
-    # Charts
-    # -------------------------------
+    # NUMERIC CONVERSIONS
+    if "Final Payout" in df_upload.columns:
+        df_upload["Final Payout"] = pd.to_numeric(df_upload["Final Payout"], errors="coerce")
 
-    col1, col2 = st.columns(2)
+    if "Parts RRP" in df_upload.columns:
+        df_upload["Parts RRP"] = pd.to_numeric(df_upload["Parts RRP"], errors="coerce")
 
-    # Dealer Revenue
-    if "Dealer name" in filtered_df.columns and "Amount" in filtered_df.columns:
+    # CLEAN VIN COLUMN
+    if "VIN" in df_upload.columns:
+        df_upload["VIN"] = df_upload["VIN"].astype(str).str.strip()
+        df_upload = df_upload.dropna(subset=["VIN"])
 
-        dealer_data = (
-            filtered_df.groupby("Dealer name")["Amount"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(15)
-            .reset_index()
-        )
+    # PREVENT DUPLICATE VIN INSERT
+    existing_vins = pd.read_sql("SELECT VIN FROM segment3_data", conn)
 
-        fig1 = px.bar(
-            dealer_data,
-            x="Dealer name",
-            y="Amount",
-            title="Top Dealers by Amount"
-        )
+    if "VIN" in df_upload.columns:
+        df_upload = df_upload[~df_upload["VIN"].isin(existing_vins["VIN"])]
 
-        col1.plotly_chart(fig1, use_container_width=True)
+    # SELECT REQUIRED COLUMNS
+    db_df = df_upload[[
+        "Dealer No",
+        "Dealer name",
+        "VIN",
+        "Parts RRP",
+        "Final Payout",
+        "Final Eligibility"
+    ]].copy()
 
-    # Region Revenue
-    if "Region" in filtered_df.columns and "Amount" in filtered_df.columns:
+    db_df.columns = [
+        "Dealer_Code",
+        "Dealer_name",
+        "VIN",
+        "Parts_RRP",
+        "Final_Payout",
+        "Final_Eligibility"
+    ]
 
-        region_data = (
-            filtered_df.groupby("Region")["Amount"]
-            .sum()
-            .reset_index()
-        )
+    db_df["Month"] = month
+    db_df["Year"] = year
 
-        fig2 = px.pie(
-            region_data,
-            names="Region",
-            values="Amount",
-            title="Region Contribution"
-        )
-
-        col2.plotly_chart(fig2, use_container_width=True)
-
-    col3, col4 = st.columns(2)
-
-    # Vehicle Model
-    if "Vehicle Model  Desc" in filtered_df.columns:
-
-        model_data = (
-            filtered_df["Vehicle Model  Desc"]
-            .value_counts()
-            .head(10)
-            .reset_index()
-        )
-
-        model_data.columns = ["Model","Count"]
-
-        fig3 = px.bar(
-            model_data,
-            x="Model",
-            y="Count",
-            title="Top Vehicle Models"
-        )
-
-        col3.plotly_chart(fig3, use_container_width=True)
-
-    # Invoice Distribution
-    if "Part Type" in filtered_df.columns:
-
-        part_data = (
-            filtered_df["Part Type"]
-            .value_counts()
-            .reset_index()
-        )
-
-        part_data.columns = ["Part Type","Count"]
-
-        fig4 = px.pie(
-            part_data,
-            names="Part Type",
-            values="Count",
-            title="Part Type Distribution"
-        )
-
-        col4.plotly_chart(fig4, use_container_width=True)
-
-    st.divider()
-
-    # -------------------------------
-    # Data Table
-    # -------------------------------
-    st.subheader("Filtered Data")
-
-    st.dataframe(
-        filtered_df,
-        use_container_width=True
+    db_df.to_sql(
+        "segment3_data",
+        conn,
+        if_exists="append",
+        index=False
     )
 
-else:
-    st.info("Upload an Excel file to start the dashboard.")
+    st.sidebar.success(f"{len(db_df)} records uploaded")
+
+# -----------------------------
+# LOAD DATABASE DATA
+# -----------------------------
+
+df = pd.read_sql("SELECT * FROM segment3_data", conn)
+
+if df.empty:
+    st.warning("Upload a payout Excel to start analytics.")
+    st.stop()
+
+# -----------------------------
+# SIDEBAR FILTERS
+# -----------------------------
+
+st.sidebar.header("Filters")
+
+dealer_filter = st.sidebar.multiselect(
+    "Dealer",
+    sorted(df["Dealer_name"].dropna().unique())
+)
+
+month_filter = st.sidebar.multiselect(
+    "Month",
+    sorted(df["Month"].dropna().unique())
+)
+
+if dealer_filter:
+    df = df[df["Dealer_name"].isin(dealer_filter)]
+
+if month_filter:
+    df = df[df["Month"].isin(month_filter)]
+
+# -----------------------------
+# CLEAN ELIGIBILITY COLUMN
+# -----------------------------
+
+df["Final_Eligibility"] = df["Final_Eligibility"].astype(str).str.strip().str.lower()
+
+# -----------------------------
+# KPI METRICS
+# -----------------------------
+
+total_vins = df["VIN"].nunique()
+
+eligible_vins = df[
+    df["Final_Eligibility"] == "yes"
+]["VIN"].nunique()
+
+eligibility_rate = 0
+if total_vins > 0:
+    eligibility_rate = (eligible_vins / total_vins) * 100
+
+st.markdown(
+    "<h2 style='text-align:center;'>Key Metrics</h2>",
+    unsafe_allow_html=True
+)
+
+col1,col2,col3,col4,col5 = st.columns(5)
+
+col1.metric(
+    "Total Dealer Payout",
+    f"₹ {df['Final_Payout'].sum():,.0f}"
+)
+
+col2.metric(
+    "Total Parts RRP",
+    f"₹ {df['Parts_RRP'].sum():,.0f}"
+)
+
+col3.metric(
+    "Total VINs",
+    total_vins
+)
+
+col4.metric(
+    "Eligible VINs",
+    eligible_vins
+)
+
+col5.metric(
+    "Eligibility Rate",
+    f"{eligibility_rate:.1f}%"
+)
+
+st.divider()
+
+# -----------------------------
+# DEALER LEADERBOARD
+# -----------------------------
+
+st.subheader("Dealer Leaderboard")
+
+dealer_leaderboard = df.groupby("Dealer_name").agg(
+    Total_Payout=("Final_Payout","sum"),
+    Total_VIN=("VIN","nunique"),
+    Eligible_VIN=("VIN", lambda x: x[df.loc[x.index,"Final_Eligibility"]=="yes"].nunique())
+).reset_index()
+
+dealer_leaderboard["Eligibility %"] = (
+    dealer_leaderboard["Eligible_VIN"] /
+    dealer_leaderboard["Total_VIN"]
+)*100
+
+dealer_leaderboard = dealer_leaderboard.sort_values(
+    "Total_Payout",
+    ascending=False
+).reset_index(drop=True)
+
+dealer_leaderboard["Rank"] = dealer_leaderboard.index + 1
+
+def medal(rank):
+    if rank == 1:
+        return "🥇"
+    elif rank == 2:
+        return "🥈"
+    elif rank == 3:
+        return "🥉"
+    else:
+        return ""
+
+dealer_leaderboard["🏆"] = dealer_leaderboard["Rank"].apply(medal)
+
+dealer_leaderboard = dealer_leaderboard[
+    ["🏆","Rank","Dealer_name","Total_Payout","Total_VIN","Eligible_VIN","Eligibility %"]
+]
+
+st.dataframe(
+    dealer_leaderboard.style
+        .format({
+            "Total_Payout":"₹ {:,.0f}",
+            "Eligibility %":"{:.1f}%"
+        }),
+    use_container_width=True
+)
+
+st.divider()
+
+# -----------------------------
+# TOP 10 DEALERS
+# -----------------------------
+
+col1,col2 = st.columns(2)
+
+with col1:
+
+    st.subheader("Top 10 Dealers")
+
+    top10 = dealer_leaderboard.head(10)
+
+    fig_top10 = px.bar(
+        top10,
+        x="Dealer_name",
+        y="Total_Payout",
+        text_auto=".2s"
+    )
+
+    st.plotly_chart(fig_top10, use_container_width=True)
+
+with col2:
+
+    st.subheader("Bottom 10 Dealers")
+
+    bottom10 = dealer_leaderboard.sort_values(
+        "Total_Payout",
+        ascending=True
+    ).head(10)
+
+    fig_bottom10 = px.bar(
+        bottom10,
+        x="Dealer_name",
+        y="Total_Payout",
+        text_auto=".2s"
+    )
+
+    st.plotly_chart(fig_bottom10, use_container_width=True)
+
+st.divider()
+
+# -----------------------------
+# DEALER WISE TOTAL PAYOUT
+# -----------------------------
+
+st.subheader("Dealer-wise Total Payout")
+
+dealer_payout = df.groupby("Dealer_name")["Final_Payout"].sum().reset_index()
+
+fig_payout = px.bar(
+    dealer_payout.sort_values("Final_Payout"),
+    x="Final_Payout",
+    y="Dealer_name",
+    orientation="h"
+)
+
+st.plotly_chart(fig_payout, use_container_width=True)
+
+st.divider()
+
+# -----------------------------
+# PARTS RRP vs ELIGIBLE PAYOUT
+# -----------------------------
+
+st.subheader("Dealer Comparison: Parts RRP vs Eligible Payout")
+
+eligible_df = df[df["Final_Eligibility"]=="yes"]
+
+dealer_compare = df.groupby("Dealer_name").agg(
+    Parts_RRP=("Parts_RRP","sum")
+).reset_index()
+
+eligible_payout = eligible_df.groupby("Dealer_name")["Final_Payout"].sum().reset_index()
+eligible_payout.columns = ["Dealer_name","Eligible_Payout"]
+
+dealer_compare = dealer_compare.merge(
+    eligible_payout,
+    on="Dealer_name",
+    how="left"
+).fillna(0)
+
+fig_compare = px.bar(
+    dealer_compare,
+    x="Dealer_name",
+    y=["Parts_RRP","Eligible_Payout"],
+    barmode="group"
+)
+
+st.plotly_chart(fig_compare, use_container_width=True)
+
+st.divider()
+
+# -----------------------------
+# RAW DATA
+# -----------------------------
+
+with st.expander("View Full Data Table"):
+    st.dataframe(df)
