@@ -2,221 +2,329 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
-import plotly.graph_objects as go
-from thefuzz import process, fuzz
 
-# -----------------------------
-# LUXURY UI CONFIG
-# -----------------------------
-st.set_page_config(page_title="Audi Segment III Analytics", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Segment III Payout Dashboard", layout="wide")
 
-# Custom Audi-themed CSS
-st.markdown("""
-    <style>
-    /* Main Background */
-    .stApp {
-        background-color: #0e1117;
-        color: #f5f5f5;
-    }
-    /* Metric Cards */
-    div[data-testid="stMetricValue"] {
-        font-size: 2.2rem !important;
-        font-weight: 600 !important;
-        color: #f5f5f5 !important;
-    }
-    div[data-testid="metric-container"] {
-        background-color: #1a1c23;
-        border: 1px solid #333;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-    }
-    /* Headers */
-    h1, h2, h3 {
-        color: #ffffff !important;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        letter-spacing: 1px;
-    }
-    /* Sidebar */
-    .css-1d391kg {
-        background-color: #16181d !important;
-    }
-    /* Buttons */
-    .stButton>button {
-        background-color: #bb0a30 !important; /* Audi Red */
-        color: white !important;
-        border-radius: 5px;
-        border: none;
-        width: 100%;
-        font-weight: bold;
-        transition: 0.3s;
-    }
-    .stButton>button:hover {
-        background-color: #ff1a4a !important;
-        box-shadow: 0 0 10px rgba(187, 10, 48, 0.5);
-    }
-    /* Dataframes */
-    .stDataFrame {
-        border: 1px solid #333;
-        border-radius: 10px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+st.title("Segment III Payout Analytics Dashboard")
 
 # -----------------------------
 # DATABASE CONNECTION
 # -----------------------------
+
 conn = sqlite3.connect("analytics.db", check_same_thread=False)
-conn.execute("PRAGMA journal_mode=WAL")
 cursor = conn.cursor()
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS segment3_data (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    Dealer_Code TEXT,
-    Dealer_name TEXT,
-    VIN TEXT,
-    Parts_RRP REAL,
-    Final_Payout REAL,
-    Final_Eligibility TEXT,
-    Month TEXT,
-    Year INTEGER,
-    upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+Dealer_Code TEXT,
+Dealer_name TEXT,
+Region TEXT,
+VIN TEXT,
+Parts_RRP REAL,
+Final_Payout REAL,
+Final_Eligibility TEXT,
+Month TEXT,
+Year INTEGER,
+upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
+
 conn.commit()
 
 # -----------------------------
-# SMART COLUMN MAPPING
+# SIDEBAR UPLOAD
 # -----------------------------
-TARGET_COLUMNS = {
-    "Dealer_Code": ["dealer no", "dlr code", "dealer_id", "dealer number", "dlr_no"],
-    "Dealer_name": ["dealer name", "dlr name", "outlet name", "dealer_name"],
-    "VIN": ["vin", "chassis number", "chassis no", "serial number"],
-    "Parts_RRP": ["parts rrp", "rrp", "parts price", "mrp"],
-    "Final_Payout": ["final payout", "payout", "incentive", "total payout"],
-    "Final_Eligibility": ["final eligibility", "eligible", "status", "eligibility"]
-}
 
-def get_smart_mapping(upload_cols):
-    mapping = {}
-    actual_cols = [str(c).strip() for c in upload_cols]
-    for target, variations in TARGET_COLUMNS.items():
-        match, score = process.extractOne(target, actual_cols, scorer=fuzz.token_sort_ratio)
-        if score > 70: mapping[target] = match
-    return mapping
+st.sidebar.header("Upload Data")
 
-# -----------------------------
-# SIDEBAR: DATA CONTROLS
-# -----------------------------
-with st.sidebar:
-    st.image("https://www.audi.com/content/dam/gbp2/experience-audi/brand-and-identity/rings/audi_rings_desktop.png", width=100)
-    st.title("Data Control")
-    
-    month_list = ["January","February","March","April","May","June","July","August","September","October","November","December"]
-    
-    with st.expander("📂 Import New Dataset"):
-        up_m = st.selectbox("Month", month_list)
-        up_y = st.number_input("Year", 2024, 2030, 2024)
-        uploaded_file = st.file_uploader("Upload Excel", type=["xlsx","xlsb"])
-        
-        if uploaded_file:
-            df_upload = pd.read_excel(uploaded_file)
-            mapping = get_smart_mapping(df_upload.columns)
-            
-            if len(mapping) < 6:
-                st.error("Header mismatch detected.")
-            else:
-                db_df = df_upload[[mapping[k] for k in TARGET_COLUMNS.keys()]].copy()
-                db_df.columns = list(TARGET_COLUMNS.keys())
-                
-                # Cleanup
-                db_df["Final_Payout"] = pd.to_numeric(db_df["Final_Payout"], errors="coerce").fillna(0)
-                db_df["Parts_RRP"] = pd.to_numeric(db_df["Parts_RRP"], errors="coerce").fillna(0)
-                db_df["VIN"] = db_df["VIN"].astype(str).str.strip().upper()
-                db_df["Final_Eligibility"] = db_df["Final_Eligibility"].astype(str).str.strip().lower()
-                db_df["Month"], db_df["Year"] = up_m, up_y
+month = st.sidebar.selectbox(
+    "Select Month",
+    [
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
+    ]
+)
 
-                if st.button("Confirm & Sync"):
-                    db_df.to_sql("segment3_data", conn, if_exists="append", index=False)
-                    st.success("Synced to Cloud.")
-                    st.rerun()
+year = st.sidebar.number_input(
+    "Select Year",
+    min_value=2020,
+    max_value=2035,
+    value=2024
+)
 
-    with st.expander("🗑️ Database Maintenance"):
-        del_m = st.selectbox("Month to Clear", month_list)
-        del_y = st.number_input("Year to Clear", 2024, 2030, 2024)
-        if st.button("Delete Selected Records"):
-            cursor.execute("DELETE FROM segment3_data WHERE Month=? AND Year=?", (del_m, del_y))
-            conn.commit()
-            st.rerun()
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Segment III Excel",
+    type=["xlsx","xls","xlsb"]
+)
 
 # -----------------------------
-# MAIN DASHBOARD
+# PROCESS UPLOADED FILE
 # -----------------------------
+
+if uploaded_file:
+
+    df_upload = pd.read_excel(uploaded_file)
+
+    df_upload.columns = (
+        df_upload.columns
+        .str.strip()
+        .str.replace("\n"," ", regex=True)
+        .str.replace("  "," ", regex=True)
+    )
+
+    # numeric conversions
+    if "Final Payout" in df_upload.columns:
+        df_upload["Final Payout"] = pd.to_numeric(df_upload["Final Payout"], errors="coerce")
+
+    if "Parts RRP" in df_upload.columns:
+        df_upload["Parts RRP"] = pd.to_numeric(df_upload["Parts RRP"], errors="coerce")
+
+    df_upload = df_upload.dropna(subset=["VIN"])
+
+    existing_vins = pd.read_sql("SELECT VIN FROM segment3_data", conn)
+    df_upload = df_upload[~df_upload["VIN"].isin(existing_vins["VIN"])]
+
+    # select columns
+    db_df = df_upload[[
+        "Dealer No_",
+        "Dealer name",
+        "Region",
+        "VIN",
+        "Parts RRP",
+        "Final Payout",
+        "Final Eligibility"
+    ]].copy()
+
+    db_df.columns = [
+        "Dealer_Code",
+        "Dealer_name",
+        "Region",
+        "VIN",
+        "Parts_RRP",
+        "Final_Payout",
+        "Final_Eligibility"
+    ]
+
+    db_df["Month"] = month
+    db_df["Year"] = year
+
+    db_df.to_sql(
+        "segment3_data",
+        conn,
+        if_exists="append",
+        index=False
+    )
+
+    st.sidebar.success(f"{len(db_df)} records uploaded")
+
+# -----------------------------
+# LOAD DATA
+# -----------------------------
+
 df = pd.read_sql("SELECT * FROM segment3_data", conn)
 
 if df.empty:
-    st.warning("Awaiting Data Upload...")
+    st.warning("Upload a payout Excel to start analytics.")
     st.stop()
 
-# Filters
-st.sidebar.divider()
-st.sidebar.header("Analytics Filters")
-f_dealer = st.sidebar.multiselect("Dealer Network", sorted(df["Dealer_name"].unique()))
-f_month = st.sidebar.multiselect("Timeframe", month_list)
+# -----------------------------
+# FILTERS
+# -----------------------------
 
-if f_dealer: df = df[df["Dealer_name"].isin(f_dealer)]
-if f_month: df = df[df["Month"].isin(f_month)]
+st.sidebar.header("Filters")
 
-# --- METRIC SECTION ---
-st.markdown("### Executive Overview")
-m1, m2, m3, m4 = st.columns(4)
+month_filter = st.sidebar.multiselect(
+    "Month",
+    sorted(df["Month"].dropna().unique())
+)
 
-total_pay = df["Final_Payout"].sum()
-unique_vins = df["VIN"].nunique()
-eligible_vins = df[df["Final_Eligibility"] == "yes"]["VIN"].nunique()
-rate = (eligible_vins/unique_vins*100) if unique_vins > 0 else 0
+dealer_filter = st.sidebar.multiselect(
+    "Dealer",
+    sorted(df["Dealer_name"].dropna().unique())
+)
 
-m1.metric("Gross Payout", f"₹ {total_pay:,.0f}")
-m2.metric("Total VIN Assets", f"{unique_vins:,}")
-m3.metric("Eligible Units", f"{eligible_vins:,}")
-m4.metric("Eligibility Rate", f"{rate:.1f}%")
+region_filter = st.sidebar.multiselect(
+    "Region",
+    sorted(df["Region"].dropna().unique())
+)
+
+if month_filter:
+    df = df[df["Month"].isin(month_filter)]
+
+if dealer_filter:
+    df = df[df["Dealer_name"].isin(dealer_filter)]
+
+if region_filter:
+    df = df[df["Region"].isin(region_filter)]
+
+# -----------------------------
+# KPI METRICS
+# -----------------------------
+
+st.markdown("<h2 style='text-align:center;'>Key Metrics</h2>", unsafe_allow_html=True)
+
+col1,col2,col3,col4 = st.columns(4)
+
+col1.metric("Total Dealer Payout", f"₹ {df['Final_Payout'].sum():,.0f}")
+col2.metric("Total Parts RRP", f"₹ {df['Parts_RRP'].sum():,.0f}")
+col3.metric("Total VINs", df["VIN"].nunique())
+col4.metric(
+    "Eligible VINs",
+    df[df["Final_Eligibility"].astype(str).str.lower()=="yes"].shape[0]
+)
 
 st.divider()
 
-# --- ANALYTICS SECTION ---
-c_left, c_right = st.columns([6, 4])
+# -----------------------------
+# DEALER LEADERBOARD
+# -----------------------------
 
-with c_left:
-    st.markdown("### Performance Leaderboard")
-    leaderboard = df.groupby("Dealer_name").agg({
-        "Final_Payout": "sum",
-        "VIN": "nunique"
-    }).rename(columns={"VIN": "Unique_VINs"}).sort_values("Final_Payout", ascending=False).reset_index()
-    
-    st.dataframe(
-        leaderboard.style.format({"Final_Payout": "₹{:,.0f}"})
-        .background_gradient(subset=["Final_Payout"], cmap="Reds"),
-        use_container_width=True, height=400
+st.subheader("Dealer Leaderboard")
+
+dealer_leaderboard = df.groupby("Dealer_name").agg(
+    Total_Payout=("Final_Payout","sum"),
+    Total_VIN=("VIN","nunique"),
+    Eligible_VIN=("Final_Eligibility",lambda x: (x.astype(str).str.lower()=="yes").sum())
+).reset_index()
+
+dealer_leaderboard["Eligibility %"] = (
+    dealer_leaderboard["Eligible_VIN"] /
+    dealer_leaderboard["Total_VIN"]
+)*100
+
+dealer_leaderboard = dealer_leaderboard.sort_values(
+    "Total_Payout",
+    ascending=False
+).reset_index(drop=True)
+
+dealer_leaderboard.index += 1
+dealer_leaderboard.index.name = "Rank"
+
+st.dataframe(dealer_leaderboard, use_container_width=True)
+
+st.divider()
+
+# -----------------------------
+# TOP & BOTTOM DEALERS
+# -----------------------------
+
+col1,col2 = st.columns(2)
+
+with col1:
+
+    st.subheader("Top 10 Dealers")
+
+    top10 = dealer_leaderboard.head(10)
+
+    fig_top = px.bar(
+        top10,
+        x="Dealer_name",
+        y="Total_Payout",
+        text_auto=True
     )
 
-with c_right:
-    st.markdown("### Payout Concentration")
-    fig = px.pie(leaderboard.head(5), values='Final_Payout', names='Dealer_name', 
-                 hole=.6, color_discrete_sequence=px.colors.sequential.Reds_r)
-    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                      font_color="white", margin=dict(t=0, b=0, l=0, r=0))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_top, use_container_width=True)
 
-# --- CHART SECTION ---
-st.markdown("### Monthly Payout Trend")
-trend_df = df.groupby(["Year", "Month"])["Final_Payout"].sum().reset_index()
-fig_trend = px.area(trend_df, x="Month", y="Final_Payout", line_shape="spline", 
-                    color_discrete_sequence=['#bb0a30'])
-fig_trend.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                        font_color="white", xaxis_gridcolor='#333', yaxis_gridcolor='#333')
+with col2:
+
+    st.subheader("Bottom 10 Dealers")
+
+    bottom10 = dealer_leaderboard.sort_values(
+        "Total_Payout",
+        ascending=True
+    ).head(10)
+
+    fig_bottom = px.bar(
+        bottom10,
+        x="Dealer_name",
+        y="Total_Payout",
+        text_auto=True
+    )
+
+    st.plotly_chart(fig_bottom, use_container_width=True)
+
+st.divider()
+
+# -----------------------------
+# DEALER PAYOUT RANKING
+# -----------------------------
+
+st.subheader("Dealer-wise Total Payout")
+
+dealer_payout = df.groupby("Dealer_name")["Final_Payout"].sum().reset_index()
+
+fig_payout = px.bar(
+    dealer_payout.sort_values("Final_Payout"),
+    x="Final_Payout",
+    y="Dealer_name",
+    orientation="h"
+)
+
+st.plotly_chart(fig_payout, use_container_width=True)
+
+st.divider()
+
+# -----------------------------
+# MONTHLY PAYOUT TREND
+# -----------------------------
+
+st.subheader("Monthly Payout Trend")
+
+month_order = [
+    "January","February","March","April","May","June",
+    "July","August","September","October","November","December"
+]
+
+df["Month"] = pd.Categorical(df["Month"], categories=month_order, ordered=True)
+
+monthly_payout = df.groupby(["Year","Month"])["Final_Payout"].sum().reset_index()
+
+fig_trend = px.line(
+    monthly_payout,
+    x="Month",
+    y="Final_Payout",
+    color="Year",
+    markers=True
+)
+
 st.plotly_chart(fig_trend, use_container_width=True)
 
-# Raw Data
-with st.expander("📂 Open Transaction Ledger"):
-    st.dataframe(df, use_container_width=True)
+st.divider()
+
+# -----------------------------
+# PARTS RRP VS ELIGIBLE PAYOUT
+# -----------------------------
+
+st.subheader("Dealer Comparison: Parts RRP vs Eligible Payout")
+
+eligible_df = df[df["Final_Eligibility"].astype(str).str.lower()=="yes"]
+
+dealer_compare = df.groupby("Dealer_name").agg(
+    Parts_RRP=("Parts_RRP","sum")
+).reset_index()
+
+eligible_payout = eligible_df.groupby("Dealer_name")["Final_Payout"].sum().reset_index()
+eligible_payout.columns = ["Dealer_name","Eligible_Payout"]
+
+dealer_compare = dealer_compare.merge(
+    eligible_payout,
+    on="Dealer_name",
+    how="left"
+).fillna(0)
+
+fig_compare = px.bar(
+    dealer_compare,
+    x="Dealer_name",
+    y=["Parts_RRP","Eligible_Payout"],
+    barmode="group"
+)
+
+st.plotly_chart(fig_compare, use_container_width=True)
+
+# -----------------------------
+# RAW DATA
+# -----------------------------
+
+with st.expander("View Full Data Table"):
+    st.dataframe(df)
