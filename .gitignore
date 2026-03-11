@@ -1,0 +1,21 @@
+# SQLite Database (Keep your data local/private)
+*.db
+*.sqlite3
+
+# Python folders
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit/IDE folders
+.streamlit/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Virtual Environments
+venv/
+env/
