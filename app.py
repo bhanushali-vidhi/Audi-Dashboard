@@ -396,3 +396,8 @@ st.plotly_chart(fig4, use_container_width=True)
 
 with st.expander("View Full Data"):
     st.dataframe(df)
+
+if st.sidebar.button("Reset Database"):
+    cursor.execute("DELETE FROM segment3_data")
+    conn.commit()
+    st.success("Database Reset")
